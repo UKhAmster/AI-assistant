@@ -4,43 +4,47 @@ import logging
 import time
 import json
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from faster_whisper import WhisperModel
 import numpy as np
 import onnxruntime as ort
+from openai import AsyncOpenAI
 
 # Принудительно очищаем переменные прокси для этого скрипта
-os.environ.pop("http_proxy", None)
-os.environ.pop("https_proxy", None)
-os.environ.pop("all_proxy", None)
-os.environ.pop("HTTP_PROXY", None)
-os.environ.pop("HTTPS_PROXY", None)
-os.environ.pop("ALL_PROXY", None)
+for var in ["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
+    os.environ.pop(var, None)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Константы
+# Константы для аудио
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 512             # Размер чанка в сэмплах
 CHUNK_BYTES = CHUNK_SIZE * 2 # Размер чанка в байтах (1024 байта)
 SILENCE_DURATION = 1.2       # Секунды тишины для отсечки фразы
-VAD_THRESHOLD = 0.0001          # Порог уверенности VAD
+VAD_THRESHOLD = 0.0001       # Порог уверенности VAD
+
+# Настройки LLM через переменные окружения (с фолбеками)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "Qwen/Qwen2.5-14B-Instruct-AWQ")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Инициализация ML-моделей при старте сервера"""
-    logger.info("Загрузка Silero VAD (ONNX)...")
+    logger.info("Загрузка Silero VAD (ONNX) на CPU...")
     current_dir = os.path.dirname(os.path.abspath(__file__))
     onnx_path = os.path.join(current_dir, "silero_vad.onnx")
     
     app.state.vad_session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
 
-    logger.info("Загрузка Faster-Whisper...")
-    app.state.stt_model = WhisperModel("small", device="cpu", compute_type="float32")
+    logger.info("Загрузка Faster-Whisper на CUDA (RTX 5090)...")
+    # ПЕРЕВЕДЕНО НА GPU для максимальной скорости
+    app.state.stt_model = WhisperModel("small", device="cuda", compute_type="float16")
+    
+    logger.info(f"Инициализация клиента LLM ({LLM_BASE_URL})...")
+    app.state.llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="local-key-not-checked")
     
     logger.info("Модели успешно загружены. Сервер готов.")
     yield
@@ -48,17 +52,17 @@ async def lifespan(app: FastAPI):
     logger.info("Очистка ресурсов...")
     app.state.vad_session = None
     app.state.stt_model = None
+    app.state.llm_client = None
 
 app = FastAPI(lifespan=lifespan)
 
 class VADEngine:
-    """Обертка для Silero VAD v5 через ONNX Runtime с режимом Рентгена"""
+    """Обертка для Silero VAD v5 через ONNX Runtime"""
     def __init__(self, session):
         self.session = session
         self.reset_states()
 
     def reset_states(self):
-        """Сброс состояний RNN для версии v5"""
         self.state = np.zeros((2, 1, 128), dtype=np.float32)
 
     async def is_speech(self, audio_chunk: bytes) -> bool:
@@ -80,14 +84,7 @@ class VADEngine:
         out, state = self.session.run(None, ort_inputs)
         self.state = state
         
-        confidence = out[0][0]
-        max_amplitude = float(np.max(np.abs(audio_float)))
-        
-        # ДЕБАГ: Если в аудио есть хоть какой-то звук (громкость > 1%), выводим в лог
-        if max_amplitude > 0.01:
-            logger.info(f"[VAD РЕНТГЕН] Громкость: {max_amplitude:.4f} | Уверенность сети: {confidence:.4f}")
-        
-        return confidence > VAD_THRESHOLD
+        return out[0][0] > VAD_THRESHOLD
 
 class STTEngine:
     """Обертка для Faster-Whisper"""
@@ -113,6 +110,50 @@ class STTEngine:
         
         return " ".join([segment.text for segment in segments]).strip()
 
+class LLMEngine:
+    """Обертка для работы с локальной LLM (Qwen) через vLLM"""
+    def __init__(self, client: AsyncOpenAI):
+        self.client = client
+        self.system_prompt = (
+            "Ты — ИИ-ассистент приемной комиссии учебного заведения. "
+            "Твоя задача — проанализировать текст пользователя и вернуть результат СТРОГО в формате JSON. "
+            "Извлеки следующие ключи:\n"
+            "- name (Имя человека, если есть, иначе null)\n"
+            "- phone (Телефон, если есть, иначе null)\n"
+            "- intent (Цель: 'Поступление', 'Расписание', 'Справка', или 'Иное')\n"
+            "- department (Направление или факультет, если упоминается, иначе null)\n"
+            "- summary (Краткое содержание вопроса в 1 предложении)\n\n"
+            "Не пиши никаких пояснений, только валидный JSON."
+        )
+
+    async def extract_entities(self, text: str) -> dict:
+        try:
+            response = await self.client.chat.completions.create(
+                model=LLM_MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": text}
+                ],
+                temperature=0.1, # Низкая температура для стабильного JSON
+                max_tokens=256
+            )
+            
+            raw_content = response.choices[0].message.content.strip()
+            
+            # Очистка от возможных маркдаун-тегов, если LLM решит их добавить
+            if raw_content.startswith("```json"):
+                raw_content = raw_content[7:-3]
+            elif raw_content.startswith("```"):
+                raw_content = raw_content[3:-3]
+                
+            return json.loads(raw_content)
+        except json.JSONDecodeError:
+            logger.error(f"Ошибка парсинга JSON. Сырой ответ LLM: {raw_content}")
+            return {"error": "Invalid JSON from LLM", "raw_text": text}
+        except Exception as e:
+            logger.error(f"Ошибка LLM-процессинга: {e}")
+            return {"error": "Не удалось извлечь сущности", "raw_text": text}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -120,12 +161,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     vad_engine = VADEngine(app.state.vad_session)
     stt_engine = STTEngine(app.state.stt_model)
+    llm_engine = LLMEngine(app.state.llm_client)
 
     incoming_buffer = bytearray()
     speech_buffer = bytearray()
     
     is_speaking = False
-    silence_chunk_count = 0
+    silence_start_time = None
 
     try:
         while True:
@@ -154,40 +196,41 @@ async def websocket_endpoint(websocket: WebSocket):
                         if silence_start_time is None:
                             silence_start_time = time.time()
                         elif (time.time() - silence_start_time) >= SILENCE_DURATION:
-                            logger.info("Конец фразы. Отправка на распознавание...")
+                            logger.info("Конец фразы. Обработка STT -> LLM...")
                             
                             audio_to_process = bytes(speech_buffer)
                             speech_buffer.clear()
                             is_speaking = False
                             silence_start_time = None
                             
-                            # Запускаем распознавание в отдельной задаче, 
-                            # чтобы не блокировать получение аудио из WebSocket
-                            async def background_transcribe(audio_bytes):
+                            # Асинхронный пайплайн
+                            async def process_pipeline(audio_bytes):
+                                # 1. Speech-to-Text
                                 text = await stt_engine.transcribe(audio_bytes)
                                 if text:
+                                    logger.info(f"Распознано: {text}")
+                                    
+                                    # 2. LLM Entity Extraction
+                                    structured_data = await llm_engine.extract_entities(text)
+                                    logger.info(f"LLM Результат: {structured_data}")
+                                    
+                                    # 3. Отправка клиенту
+                                    response = {
+                                        "status": "success", 
+                                        "transcription": text,
+                                        "entities": structured_data
+                                    }
                                     try:
-                                        response = {"status": "success", "text": text}
                                         await websocket.send_text(json.dumps(response, ensure_ascii=False))
-                                        logger.info(f"Распознано: {text}")
                                     except Exception as e:
                                         logger.error(f"Ошибка отправки клиенту: {e}")
                             
-                            asyncio.create_task(background_transcribe(audio_to_process))
+                            asyncio.create_task(process_pipeline(audio_to_process))
 
     except WebSocketDisconnect:
         logger.info("Клиент отключился")
     except Exception as e:
-        logger.error(f"Непредвиденная ошибка: {e}", exc_info=True)
-    finally:
-        if is_speaking and len(speech_buffer) > 0:
-            logger.info("Обработка остатков аудио после отключения...")
-            audio_to_process = bytes(speech_buffer)
-            async def final_transcribe(audio_bytes):
-                text = await stt_engine.transcribe(audio_bytes)
-                if text:
-                    logger.info(f"Распознано напоследок: {text}")
-            asyncio.create_task(final_transcribe(audio_to_process))
+        logger.error(f"Непредвиденная ошибка WebSocket: {e}", exc_info=True)
 
 if __name__ == "__main__":
     import uvicorn
