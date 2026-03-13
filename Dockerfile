@@ -16,8 +16,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем код проекта
-COPY main.py .
-COPY silero_vad.onnx .
+# Копируем код проекта из папки src
+COPY src/main.py .
+COPY src/silero_vad.onnx .
 
 # Запускаем сервер
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
