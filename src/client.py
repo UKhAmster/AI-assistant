@@ -24,7 +24,10 @@ async def receive_responses(websocket):
         while True:
             message = await websocket.recv()
             data = json.loads(message)
-            print(f"\n[SERVER RESPONSE]: {data.get('text', '')}\n")
+            entities = data.get("entities", {})
+            print("\n[SERVER RESPONSE]:")
+            print(json.dumps(entities, ensure_ascii=False, indent=2))
+            print("")
     except websockets.exceptions.ConnectionClosed:
         print("\nСоединение закрыто сервером.")
 

@@ -5,7 +5,6 @@ services:
   vllm-server:
     image: vllm/vllm-openai:latest
     container_name: qwen_vllm
-    runtime: nvidia
     # Пробрасываем видеокарту
     deploy:
       resources:
@@ -13,17 +12,14 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     ports:
       - "8000:8000"
     volumes:
       # Кэшируем веса модели на хосте, чтобы не качать их каждый раз при рестарте
       - ~/.cache/huggingface:/root/.cache/huggingface
     command: >
-      --model Qwen/Qwen2.5-14B-Instruct-AWQ
-      --quantization awq
-      --max-model-len 4096
-      --gpu-memory-utilization 0.4
+      --model Qwen/Qwen2.5-14B-Instruct-AWQ --quantization awq --max-model-len 4096 --gpu-memory-utilization 0.4
     # 0.4 означает, что vLLM заберет ровно 40% VRAM (~12.8 ГБ), оставив остальное для Whisper
     ipc: host
 
@@ -31,14 +27,13 @@ services:
   api-server:
     build: .
     container_name: voice_api
-    runtime: nvidia
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     ports:
       - "8001:8001"
     environment:
