@@ -3,18 +3,10 @@ import websockets
 import wave
 import json
 import sys
-import os
 
-# Принудительно очищаем переменные прокси для этого скрипта
-os.environ.pop("http_proxy", None)
-os.environ.pop("https_proxy", None)
-os.environ.pop("all_proxy", None)
-os.environ.pop("HTTP_PROXY", None)
-os.environ.pop("HTTPS_PROXY", None)
-os.environ.pop("ALL_PROXY", None)
-
-# Настройки
-WS_URL = "ws://127.0.0.1:8001/ws"
+# Настройки (замени IP на адрес твоей виртуалки, если запускаешь не на ней)
+# Например: WS_URL = "ws://192.168.1.100:8001/ws"
+WS_URL = "ws://127.0.0.1:8001/ws" 
 CHUNK_BYTES = 1024
 SAMPLE_RATE = 16000
 
@@ -24,10 +16,19 @@ async def receive_responses(websocket):
         while True:
             message = await websocket.recv()
             data = json.loads(message)
-            entities = data.get("entities", {})
-            print("\n[SERVER RESPONSE]:")
-            print(json.dumps(entities, ensure_ascii=False, indent=2))
-            print("")
+            
+            if data.get("status") == "success":
+                print("\n" + "="*50)
+                print(f"🗣️ РАСПОЗНАННЫЙ ТЕКСТ (Whisper):")
+                print(f"   {data.get('transcription', '')}\n")
+                
+                print(f"🧠 ИЗВЛЕЧЕННЫЕ СУЩНОСТИ (Qwen NER):")
+                entities = data.get('entities', {})
+                print(json.dumps(entities, indent=4, ensure_ascii=False))
+                print("="*50 + "\n")
+            else:
+                print(f"\n[СЕРВЕР]: {data}\n")
+                
     except websockets.exceptions.ConnectionClosed:
         print("\nСоединение закрыто сервером.")
 
@@ -39,41 +40,35 @@ async def stream_audio(file_path: str):
         print(f"Ошибка открытия файла: {e}")
         return
 
-    # Проверка формата
+    # Строгая проверка формата (16kHz, 16-bit, Mono)
     if wf.getframerate() != SAMPLE_RATE or wf.getsampwidth() != 2 or wf.getnchannels() != 1:
-        print("ВНИМАНИЕ: Файл должен быть 16kHz, 16-bit, Mono!")
-        print(f"Текущие параметры: {wf.getframerate()}Hz, {wf.getsampwidth()*8}-bit, {wf.getnchannels()} channels")
+        print("❌ ОШИБКА: Файл должен быть 16kHz, 16-bit, Mono!")
         wf.close()
         return
 
     async with websockets.connect(WS_URL) as websocket:
-        print(f"Подключено к {WS_URL}. Начинаем стриминг...")
+        print(f"🔗 Подключено к {WS_URL}. Начинаем стриминг аудио...")
         
-        # Запускаем слушателя в фоне
         receiver_task = asyncio.create_task(receive_responses(websocket))
 
-        # Читаем и отправляем файл чанками
         while True:
             data = wf.readframes(CHUNK_BYTES // 2) 
             if not data:
                 break
             
             await websocket.send(data)
-            await asyncio.sleep(0.032) 
+            await asyncio.sleep(0.032) # Эмуляция реального времени (32мс)
 
-        print("\nСтриминг файла завершен. Досылаем 'тишину' для срабатывания VAD...")
+        print("✅ Аудио закончилось. Шлем 'тишину' для срабатывания VAD...")
         
-        # ЭМУЛЯЦИЯ АТС: Шлем абсолютную тишину (нули) в течение 3 секунд
-        # Сервер обработает эти нули, поймет, что человек замолчал,
-        # отсчитает 1.2 секунды и принудительно запустит распознавание текста.
+        # Шлем тишину 3 секунды, чтобы сервер понял, что фраза окончена
         silence_chunk = b'\x00' * CHUNK_BYTES
         for _ in range(100):
             await websocket.send(silence_chunk)
             await asyncio.sleep(0.032)
 
-        print("\nОжидание завершения распознавания последних фраз сервера (до 10 секунд)...")
-        # Ожидаем в течение 10 секунд, пока сервер не пришлет все ответы
-        for _ in range(100):
+        print("⏳ Ожидаем ответ от LLM (до 15 секунд)...")
+        for _ in range(150):
             await asyncio.sleep(0.1)
 
         receiver_task.cancel()
