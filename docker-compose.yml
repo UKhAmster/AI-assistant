@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Локальная LLM (Qwen 2.5-14B через vLLM)
+  vllm-server:
+    image: vllm/vllm-openai:latest
+    container_name: qwen_vllm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command: >
+      --model Qwen/Qwen2.5-14B-Instruct-AWQ
+      --quantization awq
+      --max-model-len 4096
+      --gpu-memory-utilization 0.4
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 10
+    restart: unless-stopped
+
+  # FastAPI Voice Assistant (Whisper + Silero TTS + VAD)
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voice_api
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - LLM_BASE_URL=http://vllm-server:8000/v1
+    volumes:
+      # Кеш Whisper-модели — не скачивается заново при пересборке
+      - whisper-cache:/root/.cache/huggingface
+      # Кеш Silero TTS
+      - torch-hub-cache:/root/.cache/torch
+      # Логи диалогов — доступны на хосте
+      - ./logs:/app/logs
+    depends_on:
+      vllm-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  whisper-cache:
+  torch-hub-cache:

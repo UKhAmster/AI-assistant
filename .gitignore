@@ -1,0 +1,68 @@
+    # Python
+    __pycache__/
+    *.py[cod]
+    *.pyo
+    *.pyd
+    .Python
+
+    # Virtual environments
+    .venv/
+    venv/
+    env/
+
+    # Distribution / packaging
+    build/
+    dist/
+    *.egg-info/
+    *.egg
+
+    # Testing & coverage
+    .pytest_cache/
+    .coverage
+    htmlcov/
+
+    # Logs
+    *.log
+    logs/
+
+    # Environment variables
+    .env
+    .env.*
+
+    # --- Project-specific ---
+
+    # ML model weights (large files — store separately)
+    *.onnx
+    *.pt
+    *.pth
+    *.bin
+    *.safetensors
+
+    # Hugging Face / torch cache
+    .cache/
+    ~/.cache/huggingface/
+
+    # Generated audio files
+    *.wav
+    *.mp3
+    answer.wav
+
+    # Ad-hoc deployment helper scripts (not part of the app)
+    remote_ops.py
+    check_docker.py
+    patch_dockerfile.py
+    patch_remote.py
+
+    # SSH keys / credentials
+    *.pem
+    *.key
+
+    # --- IDE ---
+    .idea/
+    .vscode/
+    *.swp
+    *.swo
+
+    # --- OS ---
+    .DS_Store
+    Thumbs.db
