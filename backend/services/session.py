@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketDisconnect
 
 from backend.config import CHUNK_BYTES, SAMPLE_RATE, SILENCE_DURATION, FATAL_CONSECUTIVE_ERRORS
 from backend.engines.vad import VADEngine
@@ -62,35 +63,41 @@ class DialogSession:
 
     async def run(self) -> None:
         """Основной цикл диалога: приветствие -> прием аудио -> обработка."""
-        await self._send_greeting()
-        chunks_received = 0
+        try:
+            await self._send_greeting()
+            chunks_received = 0
 
-        while True:
-            msg = await self.websocket.receive()
+            while True:
+                msg = await self.websocket.receive()
 
-            # Текстовое сообщение — управляющий сигнал
-            if "text" in msg:
-                try:
-                    payload = json.loads(msg["text"])
-                    if payload.get("type") == "end_of_speech":
-                        await self._flush_speech()
-                except (json.JSONDecodeError, KeyError):
-                    pass
-                continue
+                # Текстовое сообщение — управляющий сигнал
+                if "text" in msg:
+                    try:
+                        payload = json.loads(msg["text"])
+                        if payload.get("type") == "end_of_speech":
+                            await self._flush_speech()
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                    continue
 
-            data = msg.get("bytes", b"")
-            if not data:
-                continue
+                data = msg.get("bytes", b"")
+                if not data:
+                    continue
 
-            self._incoming_buffer.extend(data)
-            chunks_received += 1
-            if chunks_received == 1:
-                logger.info("Первые данные от клиента: %d байт", len(data))
+                self._incoming_buffer.extend(data)
+                chunks_received += 1
+                if chunks_received == 1:
+                    logger.info("Первые данные от клиента: %d байт", len(data))
 
-            while len(self._incoming_buffer) >= CHUNK_BYTES:
-                chunk = bytes(self._incoming_buffer[:CHUNK_BYTES])
-                del self._incoming_buffer[:CHUNK_BYTES]
-                await self._handle_chunk(chunk)
+                while len(self._incoming_buffer) >= CHUNK_BYTES:
+                    chunk = bytes(self._incoming_buffer[:CHUNK_BYTES])
+                    del self._incoming_buffer[:CHUNK_BYTES]
+                    await self._handle_chunk(chunk)
+        except WebSocketDisconnect:
+            raise  # прокидываем — websocket_endpoint обработает
+        except Exception as exc:
+            await self._fatal_fallback(f"unhandled in run: {exc}")
+            raise
 
     async def _flush_speech(self) -> None:
         """Принудительно завершает фразу (push-to-talk)."""
@@ -180,10 +187,21 @@ class DialogSession:
             await self._send_text("user", user_text)
 
             # 2. LLM
-            reply_text, ticket_data = await self.llm.get_response(
-                self.chat_history, caller_phone=self.caller_phone,
-            )
-            self._consecutive_errors = 0
+            try:
+                reply_text, ticket_data = await self.llm.get_response(
+                    self.chat_history, caller_phone=self.caller_phone,
+                )
+                self._consecutive_errors = 0
+            except Exception as exc:
+                self._consecutive_errors += 1
+                logger.error("LLM error #%d: %s", self._consecutive_errors, exc)
+                if self._consecutive_errors >= FATAL_CONSECUTIVE_ERRORS:
+                    await self._fatal_fallback(
+                        f"LLM failed {self._consecutive_errors} consecutive times"
+                    )
+                    return
+                reply_text = "Извините, у меня небольшая заминка со связью."
+                ticket_data = None
             t_llm = time.time()
 
             if reply_text:
