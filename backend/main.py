@@ -9,9 +9,16 @@ from starlette.responses import StreamingResponse
 from faster_whisper import WhisperModel
 import onnxruntime as ort
 from openai import AsyncOpenAI
-import torch
-
-from backend.config import LLM_BASE_URL, WHISPER_MODEL_SIZE, TTS_MODEL_NAME, TTS_VOICE_REF, TTS_VOICE_REF_TEXT, BITRIX_WEBHOOK_URL
+from backend.config import (
+    LLM_BASE_URL,
+    WHISPER_MODEL_SIZE,
+    F5_TTS_REPO,
+    F5_TTS_CKPT_FILE,
+    F5_TTS_VOCAB_FILE,
+    TTS_VOICE_REF,
+    TTS_VOICE_REF_TEXT,
+    BITRIX_WEBHOOK_URL,
+)
 from backend.engines import VADEngine, STTEngine, TTSEngine, LLMAgent
 from backend.knowledge.loader import build_index
 from backend.knowledge.retriever import KnowledgeRetriever
@@ -68,28 +75,33 @@ async def lifespan(app: FastAPI):
         WHISPER_MODEL_SIZE, device="cuda", compute_type="float16"
     )
 
-    logger.info("3/6: Загрузка Qwen3-TTS на CUDA...")
-    from qwen_tts import Qwen3TTSModel
+    logger.info("3/6: Загрузка F5-TTS на CUDA...")
+    from huggingface_hub import hf_hub_download
+    from f5_tts.api import F5TTS
 
-    tts_model = Qwen3TTSModel.from_pretrained(
-        TTS_MODEL_NAME,
-        device_map="cuda:0",
-        dtype=torch.bfloat16,
+    ckpt_path = hf_hub_download(F5_TTS_REPO, F5_TTS_CKPT_FILE)
+    vocab_path = hf_hub_download(F5_TTS_REPO, F5_TTS_VOCAB_FILE)
+    logger.info("F5-TTS checkpoint: %s", ckpt_path)
+
+    tts_model = F5TTS(
+        model="F5TTS_v1_Base",
+        ckpt_file=ckpt_path,
+        vocab_file=vocab_path,
+        device="cuda",
     )
 
-    voice_prompt = None
     ref_path = os.path.join(os.path.dirname(__file__), TTS_VOICE_REF)
-    if os.path.exists(ref_path):
-        logger.info("Загрузка голосового референса: %s (text=%r)", ref_path, TTS_VOICE_REF_TEXT)
-        voice_prompt = tts_model.create_voice_clone_prompt(
-            ref_audio=ref_path,
-            ref_text=TTS_VOICE_REF_TEXT,
+    if not os.path.exists(ref_path):
+        raise RuntimeError(
+            f"F5-TTS требует voice_ref аудио для клонирования. "
+            f"Файл не найден: {ref_path}. "
+            f"Сконвертируй референс в 16kHz mono WAV и положи по этому пути."
         )
-    else:
-        logger.info("Голосовой референс не найден (%s), используется VoiceDesign", ref_path)
+    logger.info("Голосовой референс: %s (text=%r)", ref_path, TTS_VOICE_REF_TEXT)
 
     app.state.tts_model = tts_model
-    app.state.tts_voice_prompt = voice_prompt
+    app.state.tts_ref_audio = ref_path
+    app.state.tts_ref_text = TTS_VOICE_REF_TEXT
 
     logger.info("4/6: Инициализация клиента LLM (%s)...", LLM_BASE_URL)
     app.state.llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="local-key")
@@ -178,7 +190,11 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket=websocket,
         vad=VADEngine(app.state.vad_session),
         stt=STTEngine(app.state.stt_model),
-        tts=TTSEngine(app.state.tts_model, app.state.tts_voice_prompt),
+        tts=TTSEngine(
+            app.state.tts_model,
+            ref_audio_path=app.state.tts_ref_audio,
+            ref_text=app.state.tts_ref_text,
+        ),
         llm=LLMAgent(app.state.llm_client, retriever=app.state.retriever),
         caller_phone=caller_phone,
         enum_ids=app.state.bitrix_enum_ids,

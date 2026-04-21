@@ -22,8 +22,13 @@ MAX_CHAT_HISTORY: int = int(os.getenv("MAX_CHAT_HISTORY", "20"))
 # Whisper
 WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "small")
 
-# TTS (Qwen3-TTS)
-TTS_MODEL_NAME: str = os.getenv("TTS_MODEL_NAME", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
+# TTS (F5-TTS, русский fine-tune с voice cloning)
+F5_TTS_REPO: str = os.getenv("F5_TTS_REPO", "Misha24-10/F5-TTS_RUSSIAN")
+F5_TTS_CKPT_FILE: str = os.getenv(
+    "F5_TTS_CKPT_FILE",
+    "F5TTS_v1_Base_v2/model_last_inference.safetensors",
+)
+F5_TTS_VOCAB_FILE: str = os.getenv("F5_TTS_VOCAB_FILE", "F5TTS_v1_Base/vocab.txt")
 TTS_VOICE_REF: str = os.getenv("TTS_VOICE_REF", "voice_ref.wav")
 TTS_VOICE_REF_TEXT: str = os.getenv(
     "TTS_VOICE_REF_TEXT",

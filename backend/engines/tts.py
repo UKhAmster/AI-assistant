@@ -1,48 +1,48 @@
 import asyncio
 import logging
-import re
 
 import numpy as np
+import torch
+import torchaudio.functional as AF
 
 logger = logging.getLogger(__name__)
 
+TARGET_SR = 16000  # WebSocket-клиент ожидает 16kHz
+
 
 class TTSEngine:
-    """Qwen3-TTS — синтез русской речи с описанием голоса или клонированием."""
+    """F5-TTS с voice cloning по ref_audio + ref_text.
 
-    def __init__(self, model, voice_prompt=None) -> None:
-        self.model = model
-        self.voice_prompt = voice_prompt
+    Интерфейс: synthesize(text) -> 16-bit PCM bytes @ 16kHz mono.
+    """
+
+    def __init__(self, f5_model, ref_audio_path: str, ref_text: str) -> None:
+        self.model = f5_model
+        self.ref_audio_path = ref_audio_path
+        self.ref_text = ref_text
 
     async def synthesize(self, text: str) -> bytes:
         return await asyncio.to_thread(self._synthesize_sync, text)
 
     def _synthesize_sync(self, text: str) -> bytes:
-        clean_text = re.sub(r"[^а-яА-ЯёЁ0-9\s.,!?\-:;()\"']", "", text)
-        if not clean_text.strip():
+        if not text.strip():
             return b""
 
-        if self.voice_prompt is not None:
-            # Клонирование голоса из референса
-            wavs, sr = self.model.generate_voice_clone(
-                text=clean_text,
-                language="Russian",
-                voice_clone_prompt=self.voice_prompt,
-            )
-        else:
-            # Генерация голоса по текстовому описанию.
-            # Инструкция на английском — модель обучена на EN/ZH корпусе, EN надёжнее.
-            wavs, sr = self.model.generate_voice_design(
-                text=clean_text,
-                language="Russian",
-                instruct=(
-                    "young bright female voice, high-pitched, fast tempo, "
-                    "cheerful and energetic tone, warm and friendly delivery, "
-                    "clear articulation, Russian native speaker"
-                ),
-                temperature=0.9,
-                top_p=0.9,
-            )
+        wav, sr, _ = self.model.infer(
+            ref_file=self.ref_audio_path,
+            ref_text=self.ref_text,
+            gen_text=text,
+            show_info=lambda *a, **k: None,
+            progress=lambda *a, **k: None,
+            speed=1.0,
+            remove_silence=False,
+        )
 
-        audio_np = (wavs[0] * 32767).astype(np.int16)
+        wav_tensor = torch.from_numpy(np.asarray(wav)).float()
+        if wav_tensor.ndim > 1:
+            wav_tensor = wav_tensor.squeeze()
+        if sr != TARGET_SR:
+            wav_tensor = AF.resample(wav_tensor, orig_freq=sr, new_freq=TARGET_SR)
+
+        audio_np = (wav_tensor.numpy() * 32767.0).clip(-32768, 32767).astype(np.int16)
         return audio_np.tobytes()
