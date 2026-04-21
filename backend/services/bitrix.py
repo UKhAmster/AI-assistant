@@ -12,6 +12,35 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 BASE_TIMEOUT = 10.0
 
+_REQUEST_TYPE_PREFIX: dict[str, str] = {
+    "callback": "[Обратный звонок]",
+    "operator_requested": "[Запрошен оператор]",
+    "fatal_fallback": "[СРОЧНО: технический сбой]",
+}
+
+
+def _format_comments(
+    ticket_data: dict[str, Any], chat_history: list[dict[str, str]]
+) -> str:
+    """Формирует текст для поля COMMENTS лида в Bitrix.
+
+    Структура: [префикс по request_type] -> intent -> разделитель -> транскрипт.
+    """
+    request_type = ticket_data.get("request_type", "callback")
+    prefix = _REQUEST_TYPE_PREFIX.get(request_type, "[Обратный звонок]")
+    intent = ticket_data.get("intent", "")
+
+    lines: list[str] = [prefix]
+    if intent:
+        lines.append(intent)
+    lines.append("")
+    lines.append("—— Транскрипт ——")
+    for msg in chat_history:
+        role_label = "Оператор" if msg["role"] == "assistant" else "Абитуриент"
+        lines.append(f"{role_label}: {msg['content']}")
+
+    return "\n".join(lines)
+
 
 async def send_to_bitrix(ticket_data: dict[str, Any]) -> dict[str, Any] | None:
     """Создает лид в Bitrix24 CRM через REST webhook.
