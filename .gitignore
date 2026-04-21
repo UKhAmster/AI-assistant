@@ -1,68 +1,71 @@
-    # Python
-    __pycache__/
-    *.py[cod]
-    *.pyo
-    *.pyd
-    .Python
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
 
-    # Virtual environments
-    .venv/
-    venv/
-    env/
+# Virtual environments
+.venv/
+venv/
+env/
 
-    # Distribution / packaging
-    build/
-    dist/
-    *.egg-info/
-    *.egg
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
 
-    # Testing & coverage
-    .pytest_cache/
-    .coverage
-    htmlcov/
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
 
-    # Logs
-    *.log
-    logs/
+# Logs
+*.log
+logs/
 
-    # Environment variables
-    .env
-    .env.*
+# Environment variables
+.env
+.env.*
+!.env.example
 
-    # --- Project-specific ---
+# --- Project-specific ---
 
-    # ML model weights (large files — store separately)
-    *.onnx
-    *.pt
-    *.pth
-    *.bin
-    *.safetensors
+# ML model weights (large files — store separately)
+*.onnx
+*.pt
+*.pth
+*.bin
+*.safetensors
 
-    # Hugging Face / torch cache
-    .cache/
-    ~/.cache/huggingface/
+# Hugging Face / torch cache
+.cache/
 
-    # Generated audio files
-    *.wav
-    *.mp3
-    answer.wav
+# Generated audio files
+*.wav
+*.mp3
+answer.wav
 
-    # Ad-hoc deployment helper scripts (not part of the app)
-    remote_ops.py
-    check_docker.py
-    patch_dockerfile.py
-    patch_remote.py
+# Ad-hoc deployment helper scripts (not part of the app)
+remote_ops.py
+check_docker.py
+check.py
+patch_dockerfile.py
+patch_remote.py
+start_container.py
+transfer.py
 
-    # SSH keys / credentials
-    *.pem
-    *.key
+# SSH keys / credentials
+*.pem
+*.key
 
-    # --- IDE ---
-    .idea/
-    .vscode/
-    *.swp
-    *.swo
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
 
-    # --- OS ---
-    .DS_Store
-    Thumbs.db
+# --- OS ---
+.DS_Store
+Thumbs.db
