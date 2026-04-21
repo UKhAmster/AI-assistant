@@ -11,7 +11,7 @@ import onnxruntime as ort
 from openai import AsyncOpenAI
 import torch
 
-from backend.config import LLM_BASE_URL, WHISPER_MODEL_SIZE, TTS_MODEL_NAME, TTS_VOICE_REF, BITRIX_WEBHOOK_URL
+from backend.config import LLM_BASE_URL, WHISPER_MODEL_SIZE, TTS_MODEL_NAME, TTS_VOICE_REF, TTS_VOICE_REF_TEXT, BITRIX_WEBHOOK_URL
 from backend.engines import VADEngine, STTEngine, TTSEngine, LLMAgent
 from backend.knowledge.loader import build_index
 from backend.knowledge.retriever import KnowledgeRetriever
@@ -80,10 +80,10 @@ async def lifespan(app: FastAPI):
     voice_prompt = None
     ref_path = os.path.join(os.path.dirname(__file__), TTS_VOICE_REF)
     if os.path.exists(ref_path):
-        logger.info("Загрузка голосового референса: %s", ref_path)
+        logger.info("Загрузка голосового референса: %s (text=%r)", ref_path, TTS_VOICE_REF_TEXT)
         voice_prompt = tts_model.create_voice_clone_prompt(
             ref_audio=ref_path,
-            ref_text="Здравствуйте, вы позвонили в приёмную комиссию колледжа КЭСИ.",
+            ref_text=TTS_VOICE_REF_TEXT,
         )
     else:
         logger.info("Голосовой референс не найден (%s), используется VoiceDesign", ref_path)

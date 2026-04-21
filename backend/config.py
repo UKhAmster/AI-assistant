@@ -25,6 +25,10 @@ WHISPER_MODEL_SIZE: str = os.getenv("WHISPER_MODEL_SIZE", "small")
 # TTS (Qwen3-TTS)
 TTS_MODEL_NAME: str = os.getenv("TTS_MODEL_NAME", "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
 TTS_VOICE_REF: str = os.getenv("TTS_VOICE_REF", "voice_ref.wav")
+TTS_VOICE_REF_TEXT: str = os.getenv(
+    "TTS_VOICE_REF_TEXT",
+    "Здравствуйте, вы позвонили в приёмную комиссию колледжа КЭСИ.",
+)
 
 # Bitrix24
 BITRIX_WEBHOOK_URL: str = os.getenv("BITRIX_WEBHOOK_URL", "")
