@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from backend.config import CHUNK_BYTES, SAMPLE_RATE, SILENCE_DURATION
+from backend.config import CHUNK_BYTES, SAMPLE_RATE, SILENCE_DURATION, FATAL_CONSECUTIVE_ERRORS
 from backend.engines.vad import VADEngine
 from backend.engines.stt import STTEngine
 from backend.engines.tts import TTSEngine
@@ -233,6 +233,116 @@ class DialogSession:
 
         finally:
             self.is_processing = False
+
+    _FATAL_APOLOGY = (
+        "Извините, у меня технические сложности. "
+        "Сейчас зафиксирую вашу заявку — оператор обязательно вам перезвонит."
+    )
+    _FATAL_PHONE_PROMPT = (
+        "Продиктуйте, пожалуйста, номер телефона для связи."
+    )
+    _FATAL_GOODBYE = "До свидания."
+
+    async def _fatal_fallback(self, reason: str) -> None:
+        """Последний резерв: при любой неисправности бота создаём срочный лид
+        и вежливо закрываем звонок. В будущей итерации с Asterisk первым шагом
+        будет реальная попытка SIP-transfer."""
+        logger.error("FATAL_FALLBACK triggered: %s", reason)
+
+        try:
+            await self._speak_safe(self._FATAL_APOLOGY)
+
+            phone = self.caller_phone or ""
+            if not phone:
+                await self._speak_safe(self._FATAL_PHONE_PROMPT)
+                phone = await self._collect_phone_best_effort()
+
+            name = self._extract_name_from_history()
+
+            ticket_data = {
+                "name": name,
+                "phone": phone,
+                "intent": f"СРОЧНО — технический сбой бота: {reason}",
+                "admission_year": None,
+                "request_type": "fatal_fallback",
+            }
+
+            await send_to_bitrix(
+                ticket_data,
+                self.chat_history,
+                self.enum_ids,
+                self.caller_phone,
+            )
+
+            await self._speak_safe(self._FATAL_GOODBYE)
+        except Exception as exc:
+            logger.error("Ошибка в _fatal_fallback: %s", exc, exc_info=True)
+        finally:
+            try:
+                await self.websocket.close()
+            except Exception:
+                pass
+
+    async def _speak_safe(self, text: str) -> None:
+        """TTS + WebSocket send с подавлением ошибок (мы уже в fatal-режиме)."""
+        try:
+            self.chat_history.append({"role": "assistant", "content": text})
+            await self._send_text("assistant", text)
+            audio = await self.tts.synthesize(text)
+            await self.websocket.send_bytes(audio)
+        except Exception as exc:
+            logger.warning("Не удалось озвучить в fatal-режиме: %s", exc)
+
+    async def _collect_phone_best_effort(self, timeout_sec: float = 10.0) -> str:
+        """Одна попытка получить телефон через одну короткую речевую реплику.
+        Если не получилось — возвращает пустую строку."""
+        try:
+            self._speech_buffer.clear()
+            self._is_speaking = False
+            self._silence_start = None
+            deadline = time.time() + timeout_sec
+            while time.time() < deadline:
+                try:
+                    msg = await asyncio.wait_for(
+                        self.websocket.receive(), timeout=timeout_sec,
+                    )
+                except asyncio.TimeoutError:
+                    break
+                data = msg.get("bytes", b"")
+                if not data:
+                    continue
+                self._incoming_buffer.extend(data)
+                while len(self._incoming_buffer) >= CHUNK_BYTES:
+                    chunk = bytes(self._incoming_buffer[:CHUNK_BYTES])
+                    del self._incoming_buffer[:CHUNK_BYTES]
+                    has_speech = await self.vad.is_speech(chunk)
+                    if has_speech:
+                        self._speech_buffer.extend(chunk)
+                        self._is_speaking = True
+                        self._silence_start = None
+                    elif self._is_speaking:
+                        if self._silence_start is None:
+                            self._silence_start = time.time()
+                        elif time.time() - self._silence_start >= SILENCE_DURATION:
+                            audio = bytes(self._speech_buffer)
+                            text = await self.stt.transcribe(audio)
+                            phone = normalize_phone(text or "")
+                            return phone or ""
+            return ""
+        except Exception as exc:
+            logger.warning("Не удалось собрать телефон best-effort: %s", exc)
+            return ""
+
+    def _extract_name_from_history(self) -> str:
+        """Best-effort: ищет в user-репликах одиночное слово похожее на имя.
+        Если не нашли — возвращает пустую строку."""
+        for msg in self.chat_history:
+            if msg["role"] != "user":
+                continue
+            words = msg["content"].strip().split()
+            if len(words) == 1 and words[0][0].isupper():
+                return words[0]
+        return ""
 
     def save_log(self) -> None:
         """Сохраняет историю диалога в JSON-файл."""
