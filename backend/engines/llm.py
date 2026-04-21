@@ -230,7 +230,9 @@ class LLMAgent:
         return prompt
 
     async def get_response(
-        self, chat_history: list[dict[str, str]]
+        self,
+        chat_history: list[dict[str, str]],
+        caller_phone: str | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         """Возвращает (текст для озвучки, данные тикета или None)."""
         try:
@@ -243,7 +245,9 @@ class LLMAgent:
                     last_user_text = msg["content"]
                     break
 
-            system_prompt = self._build_system_prompt(last_user_text, user_turn_count)
+            system_prompt = self._build_system_prompt(
+                last_user_text, user_turn_count, caller_phone=caller_phone,
+            )
             messages = [{"role": "system", "content": system_prompt}] + trimmed
 
             response = await self.client.chat.completions.create(

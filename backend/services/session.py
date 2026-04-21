@@ -38,17 +38,22 @@ class DialogSession:
         stt: STTEngine,
         tts: TTSEngine,
         llm: LLMAgent,
+        caller_phone: str | None = None,
+        enum_ids: dict[str, int] | None = None,
     ) -> None:
         self.websocket = websocket
         self.vad = vad
         self.stt = stt
         self.tts = tts
         self.llm = llm
+        self.caller_phone = caller_phone
+        self.enum_ids = enum_ids
 
         self.session_id: str = uuid.uuid4().hex[:12]
         self.chat_history: list[dict[str, str]] = []
         self.is_processing: bool = False
         self._start_time: float = time.time()
+        self._consecutive_errors: int = 0
 
         self._incoming_buffer = bytearray()
         self._speech_buffer = bytearray()
@@ -175,7 +180,10 @@ class DialogSession:
             await self._send_text("user", user_text)
 
             # 2. LLM
-            reply_text, ticket_data = await self.llm.get_response(self.chat_history)
+            reply_text, ticket_data = await self.llm.get_response(
+                self.chat_history, caller_phone=self.caller_phone,
+            )
+            self._consecutive_errors = 0
             t_llm = time.time()
 
             if reply_text:
@@ -197,11 +205,19 @@ class DialogSession:
                     int((t_tts - t0) * 1000),
                 )
 
-            # 4. Bitrix24 (с проверкой телефона)
+            # 4. Bitrix24 (с учётом caller_phone из АТС и fatal_fallback ветки)
             if ticket_data:
-                phone = normalize_phone(ticket_data.get("phone", ""))
-                if phone:
-                    bitrix_task = asyncio.create_task(send_to_bitrix(ticket_data))
+                phone_for_check = ticket_data.get("phone") or self.caller_phone or ""
+                phone = normalize_phone(phone_for_check) if phone_for_check else ""
+                if phone or ticket_data.get("request_type") == "fatal_fallback":
+                    bitrix_task = asyncio.create_task(
+                        send_to_bitrix(
+                            ticket_data,
+                            self.chat_history,
+                            self.enum_ids,
+                            self.caller_phone,
+                        )
+                    )
                     bitrix_task.add_done_callback(self._on_task_done)
                 else:
                     # Телефон невалиден — переспрашиваем
