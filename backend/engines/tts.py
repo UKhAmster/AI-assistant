@@ -30,11 +30,18 @@ class TTSEngine:
                 voice_clone_prompt=self.voice_prompt,
             )
         else:
-            # Генерация голоса по текстовому описанию
+            # Генерация голоса по текстовому описанию.
+            # Инструкция на английском — модель обучена на EN/ZH корпусе, EN надёжнее.
             wavs, sr = self.model.generate_voice_design(
                 text=clean_text,
                 language="Russian",
-                instruct="молодой женский голос, мягкий и дружелюбный тон, средний темп речи",
+                instruct=(
+                    "young bright female voice, high-pitched, fast tempo, "
+                    "cheerful and energetic tone, warm and friendly delivery, "
+                    "clear articulation, Russian native speaker"
+                ),
+                temperature=0.9,
+                top_p=0.9,
             )
 
         audio_np = (wavs[0] * 32767).astype(np.int16)
