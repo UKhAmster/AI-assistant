@@ -11,11 +11,12 @@ import onnxruntime as ort
 from openai import AsyncOpenAI
 import torch
 
-from backend.config import LLM_BASE_URL, WHISPER_MODEL_SIZE, TTS_MODEL_NAME, TTS_VOICE_REF
+from backend.config import LLM_BASE_URL, WHISPER_MODEL_SIZE, TTS_MODEL_NAME, TTS_VOICE_REF, BITRIX_WEBHOOK_URL
 from backend.engines import VADEngine, STTEngine, TTSEngine, LLMAgent
 from backend.knowledge.loader import build_index
 from backend.knowledge.retriever import KnowledgeRetriever
 from backend.services.session import DialogSession
+from backend.services.bitrix import load_ai_quality_enum_ids
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,18 +57,18 @@ logging.getLogger().addHandler(sse_handler)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("1/4: Загрузка Silero VAD (ONNX) на CPU...")
+    logger.info("1/6: Загрузка Silero VAD (ONNX) на CPU...")
     vad_path = os.path.join(os.path.dirname(__file__), "silero_vad.onnx")
     app.state.vad_session = ort.InferenceSession(
         vad_path, providers=["CPUExecutionProvider"]
     )
 
-    logger.info("2/4: Загрузка Faster-Whisper на CUDA...")
+    logger.info("2/6: Загрузка Faster-Whisper на CUDA...")
     app.state.stt_model = WhisperModel(
         WHISPER_MODEL_SIZE, device="cuda", compute_type="float16"
     )
 
-    logger.info("3/5: Загрузка Qwen3-TTS на CUDA...")
+    logger.info("3/6: Загрузка Qwen3-TTS на CUDA...")
     from qwen_tts import Qwen3TTSModel
 
     tts_model = Qwen3TTSModel.from_pretrained(
@@ -90,16 +91,25 @@ async def lifespan(app: FastAPI):
     app.state.tts_model = tts_model
     app.state.tts_voice_prompt = voice_prompt
 
-    logger.info("4/5: Инициализация клиента LLM (%s)...", LLM_BASE_URL)
+    logger.info("4/6: Инициализация клиента LLM (%s)...", LLM_BASE_URL)
     app.state.llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="local-key")
 
-    logger.info("5/5: Загрузка базы знаний колледжа...")
+    logger.info("5/6: Загрузка базы знаний колледжа...")
     knowledge_index = build_index()
     app.state.retriever = KnowledgeRetriever(knowledge_index)
     if app.state.retriever.is_available:
         logger.info("База знаний загружена, RAG активен")
     else:
-        logger.info("База знаний не найдена, RAG отключен (положите .md файлы в src/data/)")
+        logger.info("База знаний не найдена, RAG отключен (положите .md файлы в backend/data/)")
+
+    # 6/6: Загрузка enum IDs для UF_CRM_AI_QUALITY
+    app.state.bitrix_enum_ids = None
+    if BITRIX_WEBHOOK_URL:
+        logger.info("6/6: Резолв Bitrix enum IDs...")
+        app.state.bitrix_enum_ids = await load_ai_quality_enum_ids(BITRIX_WEBHOOK_URL)
+        logger.info("Bitrix enum IDs: %s", app.state.bitrix_enum_ids)
+    else:
+        logger.warning("BITRIX_WEBHOOK_URL не задан, лиды в Bitrix не будут создаваться")
 
     logger.info("Все модели загружены. Сервер готов.")
     yield
@@ -147,7 +157,22 @@ async def index():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    logger.info("Входящий звонок: клиент подключен")
+
+    caller_phone_raw = websocket.query_params.get("caller_phone")
+    caller_phone: str | None = None
+    if caller_phone_raw:
+        from backend.services.phone_normalizer import normalize_phone
+        caller_phone = normalize_phone(caller_phone_raw)
+        if not caller_phone:
+            logger.warning(
+                "Невалидный caller_phone в query-param: %r (игнорирую)",
+                caller_phone_raw,
+            )
+
+    logger.info(
+        "Входящий звонок: клиент подключен, caller_phone=%s",
+        caller_phone or "<неизвестен>",
+    )
 
     session = DialogSession(
         websocket=websocket,
@@ -155,6 +180,8 @@ async def websocket_endpoint(websocket: WebSocket):
         stt=STTEngine(app.state.stt_model),
         tts=TTSEngine(app.state.tts_model, app.state.tts_voice_prompt),
         llm=LLMAgent(app.state.llm_client, retriever=app.state.retriever),
+        caller_phone=caller_phone,
+        enum_ids=app.state.bitrix_enum_ids,
     )
 
     try:
