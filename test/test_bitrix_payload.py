@@ -7,15 +7,15 @@ from backend.services.bitrix import _format_comments, _build_lead_payload
 class TestFormatComments:
     def test_callback_request_prefix(self, sample_chat_history, sample_ticket_data_callback):
         text = _format_comments(sample_ticket_data_callback, sample_chat_history)
-        assert text.startswith("[Обратный звонок]")
+        assert text.startswith("(Обратный звонок)")
 
     def test_operator_requested_prefix(self, sample_chat_history, sample_ticket_data_operator):
         text = _format_comments(sample_ticket_data_operator, sample_chat_history)
-        assert text.startswith("[Запрошен оператор]")
+        assert text.startswith("(Запрошен оператор)")
 
     def test_fatal_fallback_prefix(self, sample_chat_history, sample_ticket_data_fatal):
         text = _format_comments(sample_ticket_data_fatal, sample_chat_history)
-        assert text.startswith("[СРОЧНО: технический сбой]")
+        assert text.startswith("(СРОЧНО: технический сбой)")
 
     def test_intent_included(self, sample_chat_history, sample_ticket_data_callback):
         text = _format_comments(sample_ticket_data_callback, sample_chat_history)
@@ -51,7 +51,7 @@ class TestBuildLeadPayload:
         assert fields["UF_CRM_AI_QUALITY"] == 173
         assert fields["UF_CRM_KAKOIKLASSVIZ"] == "11"
         assert fields["UF_CRM_KAKAYASPETSIA"] == "программирование"
-        assert "[Обратный звонок]" in fields["COMMENTS"]
+        assert "(Обратный звонок)" in fields["COMMENTS"]
 
     def test_operator_requested_payload(
         self, sample_ticket_data_operator, sample_chat_history, enum_ids
@@ -64,7 +64,7 @@ class TestBuildLeadPayload:
         )
         fields = payload["fields"]
         assert fields["UF_CRM_AI_QUALITY"] == 175  # next = Некачественный
-        assert "[Запрошен оператор]" in fields["COMMENTS"]
+        assert "(Запрошен оператор)" in fields["COMMENTS"]
 
     def test_fatal_fallback_no_quality_field(
         self, sample_ticket_data_fatal, sample_chat_history, enum_ids
@@ -78,7 +78,7 @@ class TestBuildLeadPayload:
         fields = payload["fields"]
         assert "UF_CRM_AI_QUALITY" not in fields  # при fatal не ставим
         assert fields["TITLE"].startswith("СРОЧНО")
-        assert "[СРОЧНО" in fields["COMMENTS"]
+        assert "(СРОЧНО" in fields["COMMENTS"]
 
     def test_title_truncated_from_intent(
         self, sample_chat_history, enum_ids

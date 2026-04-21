@@ -34,7 +34,7 @@ _load_dotenv()
 import httpx  # noqa: E402
 
 from backend.config import BITRIX_WEBHOOK_URL  # noqa: E402
-from backend.services.bitrix import send_to_bitrix  # noqa: E402
+from backend.services.bitrix import send_to_bitrix, load_ai_quality_enum_ids  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -99,5 +99,150 @@ async def main() -> None:
     await create_test_lead()
 
 
+async def delete_lead(lead_id: int) -> None:
+    """Удалить лид (cleanup после тестов)."""
+    url = f"{BITRIX_WEBHOOK_URL.rstrip('/')}/crm.lead.delete.json"
+    async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+        await client.post(url, json={"id": lead_id})
+
+
+async def scenario_hot_callback() -> None:
+    print("\n--- Сценарий: hot_callback ---")
+    enum_ids = await load_ai_quality_enum_ids(BITRIX_WEBHOOK_URL)
+    ticket_data = {
+        "name": "Тест HotCallback",
+        "phone": "+79001111111",
+        "intent": "SMOKE: hot callback",
+        "admission_year": "current",
+        "request_type": "callback",
+        "school_class": "11",
+        "specialty": "программирование",
+    }
+    chat_history = [
+        {"role": "assistant", "content": "Здравствуйте!"},
+        {"role": "user", "content": "Хочу на программирование"},
+    ]
+    result = await send_to_bitrix(ticket_data, chat_history, enum_ids)
+    lead_id = result.get("result") if result else None
+    print(f"  lead_id = {lead_id}")
+    if lead_id:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            r = await client.get(
+                f"{BITRIX_WEBHOOK_URL.rstrip('/')}/crm.lead.get.json?id={lead_id}"
+            )
+        lead = r.json()["result"]
+        assert str(lead.get("UF_CRM_AI_QUALITY")) == str(enum_ids["current"]), (
+            f"UF_CRM_AI_QUALITY={lead.get('UF_CRM_AI_QUALITY')}, expected {enum_ids['current']}"
+        )
+        assert "(Обратный звонок)" in lead["COMMENTS"]
+        print("  ✓ payload проверен")
+        await delete_lead(lead_id)
+        print("  ✓ cleanup (lead удалён)")
+
+
+async def scenario_cold_callback() -> None:
+    print("\n--- Сценарий: cold_callback ---")
+    enum_ids = await load_ai_quality_enum_ids(BITRIX_WEBHOOK_URL)
+    ticket_data = {
+        "name": "Тест ColdCallback",
+        "phone": "+79002222222",
+        "intent": "SMOKE: cold callback",
+        "admission_year": "next",
+        "request_type": "callback",
+    }
+    chat_history = [
+        {"role": "assistant", "content": "Здравствуйте!"},
+        {"role": "user", "content": "Интересуюсь, буду поступать в следующем году"},
+    ]
+    result = await send_to_bitrix(ticket_data, chat_history, enum_ids)
+    lead_id = result.get("result") if result else None
+    print(f"  lead_id = {lead_id}")
+    if lead_id:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            r = await client.get(
+                f"{BITRIX_WEBHOOK_URL.rstrip('/')}/crm.lead.get.json?id={lead_id}"
+            )
+        lead = r.json()["result"]
+        assert str(lead.get("UF_CRM_AI_QUALITY")) == str(enum_ids["next"])
+        print("  ✓ UF_CRM_AI_QUALITY = Некачественный")
+        await delete_lead(lead_id)
+
+
+async def scenario_operator_requested() -> None:
+    print("\n--- Сценарий: operator_requested ---")
+    enum_ids = await load_ai_quality_enum_ids(BITRIX_WEBHOOK_URL)
+    ticket_data = {
+        "name": "Тест Operator",
+        "phone": "+79003333333",
+        "intent": "SMOKE: настоял на операторе",
+        "admission_year": "current",
+        "request_type": "operator_requested",
+    }
+    chat_history = [
+        {"role": "user", "content": "Нет, мне именно оператора"},
+    ]
+    result = await send_to_bitrix(ticket_data, chat_history, enum_ids)
+    lead_id = result.get("result") if result else None
+    print(f"  lead_id = {lead_id}")
+    if lead_id:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            r = await client.get(
+                f"{BITRIX_WEBHOOK_URL.rstrip('/')}/crm.lead.get.json?id={lead_id}"
+            )
+        lead = r.json()["result"]
+        assert "(Запрошен оператор)" in lead["COMMENTS"]
+        print("  ✓ COMMENTS содержит (Запрошен оператор)")
+        await delete_lead(lead_id)
+
+
+async def scenario_fatal_fallback() -> None:
+    print("\n--- Сценарий: fatal_fallback ---")
+    enum_ids = await load_ai_quality_enum_ids(BITRIX_WEBHOOK_URL)
+    ticket_data = {
+        "name": "",
+        "phone": "",
+        "intent": "SMOKE: имитация fatal_fallback",
+        "admission_year": None,
+        "request_type": "fatal_fallback",
+    }
+    chat_history = [
+        {"role": "assistant", "content": "Здравствуйте!"},
+    ]
+    result = await send_to_bitrix(
+        ticket_data, chat_history, enum_ids, caller_phone="+79009999999",
+    )
+    lead_id = result.get("result") if result else None
+    print(f"  lead_id = {lead_id}")
+    if lead_id:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            r = await client.get(
+                f"{BITRIX_WEBHOOK_URL.rstrip('/')}/crm.lead.get.json?id={lead_id}"
+            )
+        lead = r.json()["result"]
+        # UF_CRM_AI_QUALITY должно быть пустым (fatal не квалифицирует)
+        assert not lead.get("UF_CRM_AI_QUALITY") or lead.get("UF_CRM_AI_QUALITY") in (
+            False, "", "0", 0,
+        ), f"UF_CRM_AI_QUALITY должно быть пустым, got {lead.get('UF_CRM_AI_QUALITY')}"
+        assert "СРОЧНО" in lead["TITLE"]
+        assert "(СРОЧНО" in lead["COMMENTS"]
+        print("  ✓ TITLE содержит СРОЧНО, UF_CRM_AI_QUALITY пустой")
+        await delete_lead(lead_id)
+
+
+async def run_all_scenarios() -> None:
+    if not await ping_webhook():
+        print("FAIL: webhook недоступен")
+        return
+    await scenario_hot_callback()
+    await scenario_cold_callback()
+    await scenario_operator_requested()
+    await scenario_fatal_fallback()
+    print("\n✓ Все сценарии отработали")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--scenarios":
+        asyncio.run(run_all_scenarios())
+    else:
+        asyncio.run(main())

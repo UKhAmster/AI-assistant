@@ -14,9 +14,9 @@ MAX_RETRIES = 3
 BASE_TIMEOUT = 10.0
 
 _REQUEST_TYPE_PREFIX: dict[str, str] = {
-    "callback": "[Обратный звонок]",
-    "operator_requested": "[Запрошен оператор]",
-    "fatal_fallback": "[СРОЧНО: технический сбой]",
+    "callback": "(Обратный звонок)",
+    "operator_requested": "(Запрошен оператор)",
+    "fatal_fallback": "(СРОЧНО: технический сбой)",
 }
 
 
@@ -90,7 +90,7 @@ def _format_comments(
     Структура: [префикс по request_type] -> intent -> разделитель -> транскрипт.
     """
     request_type = ticket_data.get("request_type", "callback")
-    prefix = _REQUEST_TYPE_PREFIX.get(request_type, "[Обратный звонок]")
+    prefix = _REQUEST_TYPE_PREFIX.get(request_type, "(Обратный звонок)")
     intent = ticket_data.get("intent", "")
 
     lines: list[str] = [prefix]
