@@ -28,3 +28,6 @@ TTS_VOICE_REF: str = os.getenv("TTS_VOICE_REF", "voice_ref.wav")
 
 # Bitrix24
 BITRIX_WEBHOOK_URL: str = os.getenv("BITRIX_WEBHOOK_URL", "")
+
+# Fatal-fallback threshold
+FATAL_CONSECUTIVE_ERRORS: int = int(os.getenv("FATAL_CONSECUTIVE_ERRORS", "3"))
