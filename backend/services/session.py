@@ -8,13 +8,13 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from src.config import CHUNK_BYTES, SILENCE_DURATION
-from src.engines.vad import VADEngine
-from src.engines.stt import STTEngine
-from src.engines.tts import TTSEngine
-from src.engines.llm import LLMAgent
-from src.services.bitrix import send_to_bitrix
-from src.services.phone_normalizer import normalize_phone
+from backend.config import CHUNK_BYTES, SAMPLE_RATE, SILENCE_DURATION
+from backend.engines.vad import VADEngine
+from backend.engines.stt import STTEngine
+from backend.engines.tts import TTSEngine
+from backend.engines.llm import LLMAgent
+from backend.services.bitrix import send_to_bitrix
+from backend.services.phone_normalizer import normalize_phone
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +58,60 @@ class DialogSession:
     async def run(self) -> None:
         """Основной цикл диалога: приветствие -> прием аудио -> обработка."""
         await self._send_greeting()
+        chunks_received = 0
 
         while True:
-            data = await self.websocket.receive_bytes()
+            msg = await self.websocket.receive()
+
+            # Текстовое сообщение — управляющий сигнал
+            if "text" in msg:
+                try:
+                    payload = json.loads(msg["text"])
+                    if payload.get("type") == "end_of_speech":
+                        await self._flush_speech()
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                continue
+
+            data = msg.get("bytes", b"")
+            if not data:
+                continue
+
             self._incoming_buffer.extend(data)
+            chunks_received += 1
+            if chunks_received == 1:
+                logger.info("Первые данные от клиента: %d байт", len(data))
 
             while len(self._incoming_buffer) >= CHUNK_BYTES:
                 chunk = bytes(self._incoming_buffer[:CHUNK_BYTES])
                 del self._incoming_buffer[:CHUNK_BYTES]
                 await self._handle_chunk(chunk)
 
+    async def _flush_speech(self) -> None:
+        """Принудительно завершает фразу (push-to-talk)."""
+        if self._is_speaking and len(self._speech_buffer) > 0:
+            audio_to_process = bytes(self._speech_buffer)
+            duration_ms = len(audio_to_process) / 2 / SAMPLE_RATE * 1000
+            logger.info("Push-to-talk: конец фразы, %.0f мс аудио", duration_ms)
+            self._speech_buffer.clear()
+            self._is_speaking = False
+            self._silence_start = None
+            await self._maybe_process(audio_to_process)
+        elif len(self._speech_buffer) == 0:
+            logger.info("Push-to-talk: пустой буфер, речь не обнаружена")
+            await self._send_text("system", "")
+
+    async def _send_text(self, role: str, text: str) -> None:
+        """Отправляет текстовое JSON-сообщение в WebSocket для отображения в UI."""
+        await self.websocket.send_text(json.dumps(
+            {"type": "text", "role": role, "content": text},
+            ensure_ascii=False,
+        ))
+
     async def _send_greeting(self) -> None:
         self.chat_history.append({"role": "assistant", "content": GREETING})
         logger.info("Агент: %s", GREETING)
+        await self._send_text("assistant", GREETING)
         audio = await self.tts.synthesize(GREETING)
         await self.websocket.send_bytes(audio)
 
@@ -79,6 +120,7 @@ class DialogSession:
 
         if not self._is_speaking:
             if has_speech:
+                logger.info("VAD: речь обнаружена, начинаю запись")
                 self._is_speaking = True
                 self._silence_start = None
                 self._speech_buffer.clear()
@@ -93,6 +135,8 @@ class DialogSession:
                     self._silence_start = time.time()
                 elif (time.time() - self._silence_start) >= SILENCE_DURATION:
                     audio_to_process = bytes(self._speech_buffer)
+                    duration_ms = len(audio_to_process) / 2 / SAMPLE_RATE * 1000
+                    logger.info("VAD: конец фразы, %.0f мс аудио", duration_ms)
                     self._speech_buffer.clear()
                     self._is_speaking = False
                     self._silence_start = None
@@ -122,10 +166,13 @@ class DialogSession:
             t_stt = time.time()
 
             if not user_text:
+                logger.info("STT: пустая транскрипция, пропуск")
+                await self._send_text("system", "")
                 return
 
             logger.info("Пользователь: %s", user_text)
             self.chat_history.append({"role": "user", "content": user_text})
+            await self._send_text("user", user_text)
 
             # 2. LLM
             reply_text, ticket_data = await self.llm.get_response(self.chat_history)
@@ -134,6 +181,7 @@ class DialogSession:
             if reply_text:
                 logger.info("Агент: %s", reply_text)
                 self.chat_history.append({"role": "assistant", "content": reply_text})
+                await self._send_text("assistant", reply_text)
 
                 # 3. TTS
                 audio_reply = await self.tts.synthesize(reply_text)
@@ -163,6 +211,7 @@ class DialogSession:
                     )
                     logger.warning("Невалидный телефон: %s", ticket_data.get("phone"))
                     self.chat_history.append({"role": "assistant", "content": retry_text})
+                    await self._send_text("assistant", retry_text)
                     audio = await self.tts.synthesize(retry_text)
                     await self.websocket.send_bytes(audio)
 

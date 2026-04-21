@@ -6,7 +6,7 @@ LLMAgent работает в обоих случаях: с контекстом 
 
 import logging
 
-from src.knowledge.loader import KnowledgeIndex
+from backend.knowledge.loader import KnowledgeIndex
 
 logger = logging.getLogger(__name__)
 

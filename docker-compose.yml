@@ -11,22 +11,19 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     ports:
-      - "8000:8000"
+      - "8002:8002"
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     command: >
-      --model Qwen/Qwen2.5-14B-Instruct-AWQ
-      --quantization awq
-      --max-model-len 4096
-      --gpu-memory-utilization 0.4
+      --port 8002 --model Qwen/Qwen2.5-7B-Instruct-AWQ --quantization awq --max-model-len 2048 --max-num-seqs 16 --gpu-memory-utilization 0.8 --enforce-eager
     ipc: host
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      test: [ "CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\"" ]
       interval: 15s
       timeout: 5s
-      start_period: 120s
+      start_period: 1600s
       retries: 10
     restart: unless-stopped
 
@@ -42,13 +39,13 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     ports:
       - "8001:8001"
     env_file:
       - .env
     environment:
-      - LLM_BASE_URL=http://vllm-server:8000/v1
+      - LLM_BASE_URL=http://vllm-server:8002/v1
     volumes:
       # Кеш Whisper-модели — не скачивается заново при пересборке
       - whisper-cache:/root/.cache/huggingface

@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Колледж КЭСИ — Голосовой ассистент</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* --- Header --- */
+        .header {
+            padding: 16px 24px;
+            text-align: center;
+            border-bottom: 1px solid #1e293b;
+            flex-shrink: 0;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; color: #f8fafc; }
+        .header p { font-size: 12px; color: #64748b; margin-top: 4px; }
+
+        /* --- Main layout --- */
+        .main {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+
+        /* --- Log panel (left) --- */
+        .log-panel {
+            width: 420px;
+            min-width: 320px;
+            border-right: 1px solid #1e293b;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+        .log-header {
+            padding: 10px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .log-header button {
+            background: none;
+            border: 1px solid #334155;
+            color: #64748b;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .log-header button:hover { color: #e2e8f0; border-color: #475569; }
+        .log-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 12px;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+        .log-line {
+            padding: 1px 0;
+            word-break: break-all;
+            color: #94a3b8;
+        }
+        .log-line.info { color: #94a3b8; }
+        .log-line.warning { color: #eab308; }
+        .log-line.error { color: #ef4444; }
+        .log-line .log-time { color: #475569; }
+        .log-line .log-level-info { color: #38bdf8; }
+        .log-line .log-level-warning { color: #eab308; }
+        .log-line .log-level-error { color: #ef4444; font-weight: 600; }
+        .log-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #22c55e;
+            margin-right: 6px;
+            vertical-align: middle;
+            animation: log-blink 2s ease infinite;
+        }
+        .log-dot.disconnected { background: #ef4444; animation: none; }
+        @keyframes log-blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* --- Chat panel (right) --- */
+        .chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .chat-container {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+        .message.assistant {
+            align-self: flex-start;
+            background: #1e293b;
+            color: #e2e8f0;
+            border-bottom-left-radius: 4px;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: #3b82f6;
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+        .message.system {
+            align-self: center;
+            background: transparent;
+            color: #64748b;
+            font-size: 12px;
+            padding: 4px 8px;
+        }
+
+        /* --- Controls --- */
+        .controls {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            border-top: 1px solid #1e293b;
+            flex-shrink: 0;
+        }
+
+        .talk-btn {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            border: 3px solid #334155;
+            background: #1e293b;
+            color: #94a3b8;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        .talk-btn:hover { border-color: #3b82f6; color: #3b82f6; }
+        .talk-btn.recording {
+            background: #dc2626;
+            border-color: #dc2626;
+            color: #fff;
+            box-shadow: 0 0 0 6px rgba(220, 38, 38, 0.2);
+        }
+        .talk-btn.playing {
+            background: #1e293b;
+            border-color: #22c55e;
+            color: #22c55e;
+            animation: pulse-green 1s ease infinite;
+        }
+        .talk-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .talk-btn.processing {
+            opacity: 0.6;
+            border-color: #eab308;
+            color: #eab308;
+            animation: pulse-yellow 1.5s ease infinite;
+        }
+
+        @keyframes pulse-yellow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.3); }
+            50% { box-shadow: 0 0 0 6px rgba(234, 179, 8, 0); }
+        }
+        @keyframes pulse-green {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.3); }
+            50% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); }
+        }
+
+        .talk-btn svg { width: 28px; height: 28px; }
+
+        .status {
+            font-size: 12px;
+            color: #64748b;
+            height: 16px;
+        }
+
+        .connection-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        .connection-dot.connected { background: #22c55e; }
+        .connection-dot.disconnected { background: #ef4444; }
+        .connection-dot.connecting { background: #eab308; }
+
+        /* --- Scrollbar --- */
+        .log-body::-webkit-scrollbar,
+        .chat-container::-webkit-scrollbar { width: 6px; }
+        .log-body::-webkit-scrollbar-track,
+        .chat-container::-webkit-scrollbar-track { background: transparent; }
+        .log-body::-webkit-scrollbar-thumb,
+        .chat-container::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 3px;
+        }
+
+        /* --- Responsive --- */
+        @media (max-width: 800px) {
+            .main { flex-direction: column; }
+            .log-panel {
+                width: 100%;
+                min-width: unset;
+                max-height: 35vh;
+                border-right: none;
+                border-bottom: 1px solid #1e293b;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Ксения — Голосовой ассистент КЭСИ</h1>
+        <p><span id="connDot" class="connection-dot disconnected"></span><span id="connStatus">Отключено</span></p>
+    </div>
+
+    <div class="main">
+        <!-- Log panel -->
+        <div class="log-panel">
+            <div class="log-header">
+                <span><span id="logDot" class="log-dot disconnected"></span> Логи сервера</span>
+                <button id="logClearBtn">Очистить</button>
+            </div>
+            <div class="log-body" id="logBody"></div>
+        </div>
+
+        <!-- Chat panel -->
+        <div class="chat-panel">
+            <div class="chat-container" id="chat"></div>
+
+            <div class="controls">
+                <button class="talk-btn" id="talkBtn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                </button>
+                <div class="status" id="status">Подключение...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const SAMPLE_RATE_IN  = 16000;
+    const SAMPLE_RATE_OUT = 16000;
+    const CHUNK_SIZE      = 512;
+    const CHUNK_BYTES     = CHUNK_SIZE * 2;
+    const SILENCE_CHUNKS  = Math.ceil(1.0 * SAMPLE_RATE_IN / CHUNK_SIZE) + 5;
+
+    const chat      = document.getElementById('chat');
+    const talkBtn   = document.getElementById('talkBtn');
+    const statusEl  = document.getElementById('status');
+    const connDot   = document.getElementById('connDot');
+    const connStat  = document.getElementById('connStatus');
+    const logBody   = document.getElementById('logBody');
+    const logDot    = document.getElementById('logDot');
+    const logClearBtn = document.getElementById('logClearBtn');
+
+    let ws = null;
+    let micCtx = null;
+    let playCtx = null;
+    let micStream = null;
+    let workletNode = null;
+    let isRecording = false;
+    let isProcessing = false;
+    let processingTimer = null;
+    let audioQueue = [];
+    let isPlaying = false;
+    let micReady = false;
+    let chunksSent = 0;
+
+    // --- Log panel ---
+    let logAutoScroll = true;
+    logBody.addEventListener('scroll', () => {
+        const atBottom = logBody.scrollHeight - logBody.scrollTop - logBody.clientHeight < 40;
+        logAutoScroll = atBottom;
+    });
+    logClearBtn.addEventListener('click', () => { logBody.innerHTML = ''; });
+
+    function addLog(text) {
+        const line = document.createElement('div');
+        line.className = 'log-line';
+
+        // Colorize by level
+        if (text.includes('- ERROR -')) line.classList.add('error');
+        else if (text.includes('- WARNING -')) line.classList.add('warning');
+        else line.classList.add('info');
+
+        // Highlight parts
+        const html = text
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})/, '<span class="log-time">$1</span>')
+            .replace(/- (INFO) -/, '- <span class="log-level-info">$1</span> -')
+            .replace(/- (WARNING) -/, '- <span class="log-level-warning">$1</span> -')
+            .replace(/- (ERROR) -/, '- <span class="log-level-error">$1</span> -');
+
+        line.innerHTML = html;
+        logBody.appendChild(line);
+
+        // Keep max 500 lines
+        while (logBody.children.length > 500) logBody.removeChild(logBody.firstChild);
+
+        if (logAutoScroll) logBody.scrollTop = logBody.scrollHeight;
+    }
+
+    function connectLogs() {
+        const evtSource = new EventSource('/logs');
+        evtSource.onopen = () => { logDot.classList.remove('disconnected'); };
+        evtSource.onmessage = (e) => { addLog(e.data); };
+        evtSource.onerror = () => {
+            logDot.classList.add('disconnected');
+            evtSource.close();
+            setTimeout(connectLogs, 3000);
+        };
+    }
+
+    // --- UI helpers ---
+    function addMessage(text, role) {
+        const div = document.createElement('div');
+        div.className = `message ${role}`;
+        div.textContent = text;
+        chat.appendChild(div);
+        chat.scrollTop = chat.scrollHeight;
+    }
+
+    function setStatus(text) { statusEl.textContent = text; }
+
+    function setConnection(state) {
+        connDot.className = `connection-dot ${state}`;
+        const labels = { connected: 'Подключено', disconnected: 'Отключено', connecting: 'Подключение...' };
+        connStat.textContent = labels[state] || state;
+    }
+
+    function updateButtonState() {
+        talkBtn.classList.remove('processing');
+        if (isPlaying) {
+            talkBtn.disabled = true;
+        } else if (isProcessing) {
+            talkBtn.disabled = true;
+            talkBtn.classList.add('processing');
+        } else {
+            talkBtn.disabled = !ws || ws.readyState !== WebSocket.OPEN;
+        }
+    }
+
+    // --- WebSocket ---
+    function connect() {
+        setConnection('connecting');
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(`${proto}://${location.host}/ws`);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = () => {
+            setConnection('connected');
+            setStatus('Ксения приветствует вас...');
+            isProcessing = false;
+            updateButtonState();
+        };
+
+        ws.onmessage = (e) => {
+            if (e.data instanceof ArrayBuffer) {
+                audioQueue.push(new Int16Array(e.data));
+                if (!isPlaying) playQueue();
+            } else if (typeof e.data === 'string') {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (msg.type === 'text') {
+                        if (msg.content) addMessage(msg.content, msg.role || 'system');
+                        // Unlock on assistant reply or empty system message (STT returned nothing)
+                        if (msg.role === 'assistant' || msg.role === 'system') {
+                            isProcessing = false;
+                            clearTimeout(processingTimer);
+                            if (!isPlaying && !msg.content) setStatus('Не удалось распознать. Попробуйте снова.');
+                            updateButtonState();
+                        }
+                    }
+                } catch (_) {}
+            }
+        };
+
+        ws.onclose = () => {
+            setConnection('disconnected');
+            talkBtn.disabled = true;
+            isProcessing = false;
+            setStatus('Соединение потеряно. Переподключение...');
+            setTimeout(connect, 3000);
+        };
+
+        ws.onerror = () => { ws.close(); };
+    }
+
+    // --- Audio playback (24kHz PCM) ---
+    async function playQueue() {
+        if (audioQueue.length === 0) {
+            isPlaying = false;
+            talkBtn.classList.remove('playing');
+            if (!isProcessing) setStatus('Нажмите и удерживайте для разговора');
+            updateButtonState();
+            return;
+        }
+
+        isPlaying = true;
+        talkBtn.classList.add('playing');
+        talkBtn.disabled = true;
+        setStatus('Ксения говорит...');
+
+        let totalLen = 0;
+        for (const chunk of audioQueue) totalLen += chunk.length;
+        const merged = new Float32Array(totalLen);
+        let offset = 0;
+        for (const chunk of audioQueue) {
+            for (let i = 0; i < chunk.length; i++) merged[offset++] = chunk[i] / 32768;
+        }
+        audioQueue = [];
+
+        if (!playCtx) playCtx = new AudioContext({ sampleRate: SAMPLE_RATE_OUT });
+
+        const buffer = playCtx.createBuffer(1, merged.length, SAMPLE_RATE_OUT);
+        buffer.getChannelData(0).set(merged);
+
+        const source = playCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(playCtx.destination);
+        source.onended = () => playQueue();
+        source.start();
+    }
+
+    // --- Microphone (AudioWorklet → 16kHz PCM) ---
+    const workletCode = `
+    class PcmProcessor extends AudioWorkletProcessor {
+        constructor() { super(); this.buffer = new Float32Array(0); }
+        process(inputs) {
+            const input = inputs[0];
+            if (!input || !input[0]) return true;
+            const samples = input[0];
+            const newBuf = new Float32Array(this.buffer.length + samples.length);
+            newBuf.set(this.buffer);
+            newBuf.set(samples, this.buffer.length);
+            this.buffer = newBuf;
+            while (this.buffer.length >= 512) {
+                const chunk = this.buffer.slice(0, 512);
+                this.port.postMessage(chunk.buffer, [chunk.buffer]);
+                this.buffer = this.buffer.slice(512);
+            }
+            return true;
+        }
+    }
+    registerProcessor('pcm-processor', PcmProcessor);
+    `;
+
+    async function startMic() {
+        micCtx = new AudioContext({ sampleRate: SAMPLE_RATE_IN });
+        micStream = await navigator.mediaDevices.getUserMedia({
+            audio: { sampleRate: SAMPLE_RATE_IN, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+        });
+
+        const blob = new Blob([workletCode], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        await micCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+
+        const source = micCtx.createMediaStreamSource(micStream);
+        workletNode = new AudioWorkletNode(micCtx, 'pcm-processor');
+
+        workletNode.port.onmessage = (e) => {
+            if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+            const float32 = new Float32Array(e.data);
+            const int16 = new Int16Array(float32.length);
+            for (let i = 0; i < float32.length; i++) {
+                int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32768)));
+            }
+            ws.send(int16.buffer);
+            chunksSent++;
+        };
+
+        source.connect(workletNode);
+        workletNode.connect(micCtx.destination);
+    }
+
+    async function startRecording() {
+        if (isPlaying || isProcessing) return;
+        // Resume AudioContext (Chrome blocks until user gesture)
+        if (micCtx && micCtx.state === 'suspended') await micCtx.resume();
+        if (playCtx && playCtx.state === 'suspended') await playCtx.resume();
+        isRecording = true;
+        chunksSent = 0;
+        talkBtn.classList.add('recording');
+        setStatus('Говорите...');
+    }
+
+    function stopRecording() {
+        if (!isRecording) return;
+        isRecording = false;
+        talkBtn.classList.remove('recording');
+
+        if (chunksSent === 0) {
+            // Микрофон не отправил ни одного чанка — не блокируем UI
+            setStatus('Нажмите и удерживайте для разговора');
+            updateButtonState();
+            return;
+        }
+
+        isProcessing = true;
+        talkBtn.disabled = true;
+        setStatus(`Обработка... (отправлено ${chunksSent} чанков)`);
+        updateButtonState();
+
+        // Signal end of speech to server
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'end_of_speech' }));
+        }
+
+        // Safety timeout: unlock after 30s if server never responds
+        clearTimeout(processingTimer);
+        processingTimer = setTimeout(() => {
+            if (isProcessing) {
+                isProcessing = false;
+                setStatus('Нет ответа от сервера. Попробуйте снова.');
+                updateButtonState();
+            }
+        }, 30000);
+    }
+
+    // --- Button events ---
+    talkBtn.addEventListener('mousedown',  (e) => { e.preventDefault(); startRecording(); });
+    talkBtn.addEventListener('mouseup',    (e) => { e.preventDefault(); stopRecording(); });
+    talkBtn.addEventListener('mouseleave', (e) => { e.preventDefault(); stopRecording(); });
+    talkBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+    talkBtn.addEventListener('touchend',   (e) => { e.preventDefault(); stopRecording(); }, { passive: false });
+    talkBtn.addEventListener('touchcancel',(e) => { e.preventDefault(); stopRecording(); }, { passive: false });
+
+    // --- Init ---
+    (async () => {
+        connectLogs();
+        try {
+            await startMic();
+            connect();
+        } catch (err) {
+            setStatus('Ошибка доступа к микрофону: ' + err.message);
+        }
+    })();
+    </script>
+</body>
+</html>

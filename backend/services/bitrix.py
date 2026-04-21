@@ -3,8 +3,8 @@ from typing import Any
 
 import httpx
 
-from src.config import BITRIX_WEBHOOK_URL
-from src.services.phone_normalizer import normalize_phone
+from backend.config import BITRIX_WEBHOOK_URL
+from backend.services.phone_normalizer import normalize_phone
 
 logger = logging.getLogger(__name__)
 

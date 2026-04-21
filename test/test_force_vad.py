@@ -1,6 +1,6 @@
 import wave, asyncio
 async def test():
-    from src.main import STTEngine, WhisperModel
+    from backend.main import STTEngine, WhisperModel
     import numpy as np
     model = WhisperModel("small", device="cpu", compute_type="float32")
     stt = STTEngine(model)

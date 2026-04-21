@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import onnxruntime as ort
 
-from src.config import CHUNK_BYTES, SAMPLE_RATE, VAD_THRESHOLD
+from backend.config import CHUNK_BYTES, SAMPLE_RATE, VAD_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
