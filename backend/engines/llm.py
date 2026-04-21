@@ -90,8 +90,6 @@ _CALLER_PHONE_TEMPLATE = (
     "Телефон уже известен из системы, не переспрашивай его."
 )
 
-TRANSFER_REPLY = "Конечно, сейчас переведу, пожалуйста ожидайте."
-
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -100,43 +98,59 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "transfer_to_operator",
-            "description": (
-                "Перевести звонок на оператора. Вызывай ТОЛЬКО когда "
-                "собеседник ЯВНО и ДОСЛОВНО попросил оператора или живого человека. "
-                "НЕ вызывай если просто не понял вопрос — переспроси вместо этого."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Краткая причина перевода",
-                    },
-                },
-                "required": ["reason"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "create_ticket",
             "description": (
-                "Создать заявку на обратный звонок. Вызывай когда "
-                "собеседник согласился оставить контакты для обратного звонка."
+                "Создать заявку на обратный звонок или на перевод оператора. "
+                "Вызывай когда абитуриент согласился оставить контакты — "
+                "или после того как сам попросил перезвонить (request_type='callback'), "
+                "или когда настоял на операторе после предложения помощи "
+                "(request_type='operator_requested')."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Имя абонента"},
-                    "phone": {"type": "string", "description": "Контактный телефон"},
+                    "name": {
+                        "type": "string",
+                        "description": "Имя абитуриента (как представился)",
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": (
+                            "Номер телефона. Опциональный — если в системе "
+                            "уже есть ТЕЛЕФОН АБОНЕНТА, не заполняй."
+                        ),
+                    },
                     "intent": {
                         "type": "string",
-                        "description": "Краткая суть вопроса",
+                        "description": "Краткая суть запроса абитуриента одной фразой",
+                    },
+                    "admission_year": {
+                        "type": "string",
+                        "enum": ["current", "next"],
+                        "description": (
+                            "Год поступления: 'current' = этот календарный год, "
+                            "'next' = следующий или позже."
+                        ),
+                    },
+                    "request_type": {
+                        "type": "string",
+                        "enum": ["callback", "operator_requested"],
+                        "description": (
+                            "'callback' — сам попросил перезвон или согласился. "
+                            "'operator_requested' — настоял на живом операторе "
+                            "после предложения помощи."
+                        ),
+                    },
+                    "school_class": {
+                        "type": "string",
+                        "description": "Класс абитуриента (например '9' или '11'), если упомянут",
+                    },
+                    "specialty": {
+                        "type": "string",
+                        "description": "Интересующая специальность (например 'программирование'), если упомянута",
                     },
                 },
-                "required": ["name", "phone", "intent"],
+                "required": ["name", "intent", "admission_year", "request_type"],
             },
         },
     },
@@ -258,10 +272,6 @@ class LLMAgent:
                                 "Записала! Наши специалисты свяжутся с вами "
                                 "в ближайшее время."
                             )
-                    elif tool_call.function.name == "transfer_to_operator":
-                        reason = json.loads(tool_call.function.arguments).get("reason", "")
-                        logger.info("LLM: перевод на оператора: %s", reason)
-                        reply_text = TRANSFER_REPLY
 
             return reply_text, ticket_data
 
