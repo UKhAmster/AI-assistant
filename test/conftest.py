@@ -71,4 +71,6 @@ def sample_ticket_data_fatal() -> dict:
 
 @pytest.fixture
 def enum_ids() -> dict[str, int]:
+    # Bitrix24 UF_CRM_AI_QUALITY enum IDs (dev instance cesicollege.bitrix24.ru):
+    # "Качественный" → 173, "Некачественный" → 175
     return {"current": 173, "next": 175}
