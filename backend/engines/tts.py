@@ -33,7 +33,9 @@ class TTSEngine:
             ref_text=self.ref_text,
             gen_text=text,
             show_info=lambda *a, **k: None,
-            progress=lambda *a, **k: None,
+            # progress=tqdm by default — печатает progress bar в stdout,
+            # это ок для отладки; передача lambda/None падает т.к. f5-tts
+            # дёргает progress.tqdm() где это модуль.
             speed=1.0,
             remove_silence=False,
         )
