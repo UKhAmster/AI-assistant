@@ -19,6 +19,68 @@ _REQUEST_TYPE_PREFIX: dict[str, str] = {
 }
 
 
+async def load_ai_quality_enum_ids(webhook_url: str) -> dict[str, int]:
+    """Резолвит enum-ID значений UF_CRM_AI_QUALITY при старте приложения.
+
+    Identify by VALUE strict match: "Качественный" → "current", "Некачественный" → "next".
+    XML_ID не используем — он не сохраняется через REST Bitrix.
+
+    Returns:
+        {"current": <id_Качественный>, "next": <id_Некачественный>}
+
+    Raises:
+        RuntimeError: если поле UF_CRM_AI_QUALITY не существует, либо не найдено
+            одно из обязательных значений, либо webhook недоступен.
+    """
+    url = f"{webhook_url.rstrip('/')}/crm.lead.userfield.list.json"
+    payload = {"filter": {"FIELD_NAME": "UF_CRM_AI_QUALITY"}}
+
+    try:
+        async with httpx.AsyncClient(timeout=BASE_TIMEOUT, trust_env=False) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+    except httpx.HTTPError as e:
+        raise RuntimeError(
+            f"Не удалось достучаться до Bitrix webhook при загрузке enum IDs: {e}"
+        ) from e
+
+    data = response.json()
+    if "error" in data:
+        raise RuntimeError(
+            f"Bitrix вернул ошибку {data['error']}: {data.get('error_description', '')}"
+        )
+
+    fields = data.get("result", [])
+    if not fields:
+        raise RuntimeError(
+            "Поле UF_CRM_AI_QUALITY не найдено в Bitrix. "
+            "Проверь UI: CRM → Настройки → Настройки форм и отчётов → "
+            "Пользовательские поля → Лиды."
+        )
+
+    items = fields[0].get("LIST", [])
+    mapping: dict[str, int] = {}
+    for item in items:
+        value = item.get("VALUE", "").strip()
+        item_id = int(item["ID"])
+        if value == "Качественный":
+            mapping["current"] = item_id
+        elif value == "Некачественный":
+            mapping["next"] = item_id
+
+    missing = [k for k in ("current", "next") if k not in mapping]
+    if missing:
+        expected = {"current": "Качественный", "next": "Некачественный"}
+        missing_names = ", ".join(expected[m] for m in missing)
+        raise RuntimeError(
+            f"В поле UF_CRM_AI_QUALITY не найдены значения: {missing_names}. "
+            "Проверь UI: CRM → Настройки → Пользовательские поля → "
+            "AI: Качество лида → список значений."
+        )
+
+    return mapping
+
+
 def _format_comments(
     ticket_data: dict[str, Any], chat_history: list[dict[str, str]]
 ) -> str:
