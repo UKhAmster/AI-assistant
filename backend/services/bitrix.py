@@ -42,6 +42,54 @@ def _format_comments(
     return "\n".join(lines)
 
 
+_MAX_TITLE_LEN = 100
+
+
+def _build_lead_payload(
+    ticket_data: dict[str, Any],
+    chat_history: list[dict[str, str]],
+    enum_ids: dict[str, int],
+    phone: str,
+) -> dict[str, Any]:
+    """Собирает JSON-payload для crm.lead.add.
+
+    phone: уже нормализованный телефон (или пустая строка для fatal_fallback).
+    enum_ids: {"current": <id_Качественный>, "next": <id_Некачественный>}.
+    """
+    request_type = ticket_data.get("request_type", "callback")
+    intent = ticket_data.get("intent", "без темы")
+
+    if request_type == "fatal_fallback":
+        title = "СРОЧНО: сбой бота — оператор срочно перезвонить"
+    else:
+        title = f"Звонок: {intent}"
+    title = title[:_MAX_TITLE_LEN]
+
+    fields: dict[str, Any] = {
+        "TITLE": title,
+        "NAME": ticket_data.get("name", ""),
+        "SOURCE_ID": "CALLBACK",
+        "COMMENTS": _format_comments(ticket_data, chat_history),
+    }
+
+    if phone:
+        fields["PHONE"] = [{"VALUE": phone, "VALUE_TYPE": "MOBILE"}]
+
+    admission_year = ticket_data.get("admission_year")
+    if request_type != "fatal_fallback" and admission_year in ("current", "next"):
+        fields["UF_CRM_AI_QUALITY"] = enum_ids[admission_year]
+
+    school_class = ticket_data.get("school_class")
+    if school_class:
+        fields["UF_CRM_KAKOIKLASSVIZ"] = school_class
+
+    specialty = ticket_data.get("specialty")
+    if specialty:
+        fields["UF_CRM_KAKAYASPETSIA"] = specialty
+
+    return {"fields": fields}
+
+
 async def send_to_bitrix(ticket_data: dict[str, Any]) -> dict[str, Any] | None:
     """Создает лид в Bitrix24 CRM через REST webhook.
 
