@@ -95,6 +95,14 @@ class DialogSession:
                     await self._handle_chunk(chunk)
         except WebSocketDisconnect:
             raise  # прокидываем — websocket_endpoint обработает
+        except RuntimeError as exc:
+            # Starlette кидает RuntimeError при receive() после disconnect —
+            # это нормальное завершение клиентом, не сбой бота
+            if "disconnect message has been received" in str(exc):
+                logger.info("Звонок завершён клиентом (websocket disconnect)")
+                return
+            await self._fatal_fallback(f"unhandled in run: {exc}")
+            raise
         except Exception as exc:
             await self._fatal_fallback(f"unhandled in run: {exc}")
             raise
