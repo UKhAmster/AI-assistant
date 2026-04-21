@@ -392,7 +392,9 @@
     function connect() {
         setConnection('connecting');
         const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(`${proto}://${location.host}/ws`);
+        const queryPhone = new URLSearchParams(window.location.search).get('caller_phone');
+        const wsUrl = `${proto}://${location.host}/ws${queryPhone ? `?caller_phone=${encodeURIComponent(queryPhone)}` : ''}`;
+        ws = new WebSocket(wsUrl);
         ws.binaryType = 'arraybuffer';
 
         ws.onopen = () => {
