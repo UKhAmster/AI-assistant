@@ -5,6 +5,8 @@ import numpy as np
 import torch
 import torchaudio.functional as AF
 
+from backend.engines.tts_pronunciations import apply_pronunciations
+
 logger = logging.getLogger(__name__)
 
 TARGET_SR = 16000  # WebSocket-клиент ожидает 16kHz
@@ -13,13 +15,21 @@ TARGET_SR = 16000  # WebSocket-клиент ожидает 16kHz
 class TTSEngine:
     """F5-TTS с voice cloning по ref_audio + ref_text.
 
+    Pipeline: text → словарь транскрипций → RUAccent (если задан) → F5-TTS.
     Интерфейс: synthesize(text) -> 16-bit PCM bytes @ 16kHz mono.
     """
 
-    def __init__(self, f5_model, ref_audio_path: str, ref_text: str) -> None:
+    def __init__(
+        self,
+        f5_model,
+        ref_audio_path: str,
+        ref_text: str,
+        accentizer=None,
+    ) -> None:
         self.model = f5_model
         self.ref_audio_path = ref_audio_path
         self.ref_text = ref_text
+        self.accentizer = accentizer
 
     async def synthesize(self, text: str) -> bytes:
         return await asyncio.to_thread(self._synthesize_sync, text)
@@ -27,6 +37,17 @@ class TTSEngine:
     def _synthesize_sync(self, text: str) -> bytes:
         if not text.strip():
             return b""
+
+        # 1. Ручные транскрипции (аббревиатуры, имена собственные).
+        text = apply_pronunciations(text)
+
+        # 2. Автоматическая расстановка ударений (RUAccent) поверх — он
+        # уважает уже проставленные `+` и заполняет остальное.
+        if self.accentizer is not None:
+            try:
+                text = self.accentizer.process_all(text)
+            except Exception as e:
+                logger.warning("RUAccent failed, fallback to plain text: %s", e)
 
         wav, sr, _ = self.model.infer(
             ref_file=self.ref_audio_path,

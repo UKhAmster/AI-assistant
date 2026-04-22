@@ -103,6 +103,25 @@ async def lifespan(app: FastAPI):
     app.state.tts_ref_audio = ref_path
     app.state.tts_ref_text = TTS_VOICE_REF_TEXT
 
+    # RUAccent — авто-расстановка ударений. Ставит `+` на слова без него;
+    # проставленные вручную (через словарь tts_pronunciations) сохраняет.
+    app.state.accentizer = None
+    try:
+        from ruaccent import RUAccent
+        accentizer = RUAccent()
+        accentizer.load(
+            omograph_model_size="turbo3.1",
+            use_dictionary=True,
+            tiny_mode=False,
+        )
+        app.state.accentizer = accentizer
+        logger.info("RUAccent загружен (авто-ударения активны)")
+    except Exception as e:
+        logger.warning(
+            "RUAccent не доступен (%s), TTS без авто-ударений — только словарь",
+            e,
+        )
+
     logger.info("4/6: Инициализация клиента LLM (%s)...", LLM_BASE_URL)
     app.state.llm_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key="local-key")
 
@@ -194,6 +213,7 @@ async def websocket_endpoint(websocket: WebSocket):
             app.state.tts_model,
             ref_audio_path=app.state.tts_ref_audio,
             ref_text=app.state.tts_ref_text,
+            accentizer=app.state.accentizer,
         ),
         llm=LLMAgent(app.state.llm_client, retriever=app.state.retriever),
         caller_phone=caller_phone,
