@@ -3,7 +3,9 @@ import json
 import logging
 import os
 import time
+import traceback
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import WebSocket
@@ -15,6 +17,7 @@ from backend.engines.stt import STTEngine
 from backend.engines.tts import TTSEngine
 from backend.engines.llm import LLMAgent
 from backend.services.bitrix import send_to_bitrix
+from backend.services.disconnect_policy import is_normal_disconnect
 from backend.services.phone_normalizer import normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -94,17 +97,18 @@ class DialogSession:
                     del self._incoming_buffer[:CHUNK_BYTES]
                     await self._handle_chunk(chunk)
         except WebSocketDisconnect:
-            raise  # прокидываем — websocket_endpoint обработает
-        except RuntimeError as exc:
-            # Starlette кидает RuntimeError при receive() после disconnect —
-            # это нормальное завершение клиентом, не сбой бота
-            if "disconnect message has been received" in str(exc):
-                logger.info("Звонок завершён клиентом (websocket disconnect)")
-                return
-            await self._fatal_fallback(f"unhandled in run: {exc}")
-            raise
+            raise  # нормальное закрытие — websocket_endpoint обработает
         except Exception as exc:
-            await self._fatal_fallback(f"unhandled in run: {exc}")
+            # Whitelist — любые признаки нормального закрытия соединения
+            # не должны триггерить fatal_fallback. Тихо завершаемся.
+            if is_normal_disconnect(exc):
+                logger.info(
+                    "Звонок завершён клиентом (%s): %s",
+                    type(exc).__name__, exc,
+                )
+                return
+            # Всё остальное — реальный сбой, нужно оповестить оператора.
+            await self._fatal_fallback("unhandled in run", trigger_exc=exc)
             raise
 
     async def _flush_speech(self) -> None:
@@ -195,6 +199,10 @@ class DialogSession:
             await self._send_text("user", user_text)
 
             # 2. LLM
+            # NOTE: текущая LLMAgent.get_response ловит все Exception внутри
+            # и возвращает fallback-reply; наружу исключения не всплывают.
+            # Этот try/except — safety net на случай будущих изменений
+            # llm.py (например, если там добавят bubble-up критичных ошибок).
             try:
                 reply_text, ticket_data = await self.llm.get_response(
                     self.chat_history, caller_phone=self.caller_phone,
@@ -205,7 +213,8 @@ class DialogSession:
                 logger.error("LLM error #%d: %s", self._consecutive_errors, exc)
                 if self._consecutive_errors >= FATAL_CONSECUTIVE_ERRORS:
                     await self._fatal_fallback(
-                        f"LLM failed {self._consecutive_errors} consecutive times"
+                        f"LLM failed {self._consecutive_errors} consecutive times",
+                        trigger_exc=exc,
                     )
                     return
                 reply_text = "Извините, у меня небольшая заминка со связью."
@@ -269,11 +278,21 @@ class DialogSession:
     )
     _FATAL_GOODBYE = "До свидания."
 
-    async def _fatal_fallback(self, reason: str) -> None:
-        """Последний резерв: при любой неисправности бота создаём срочный лид
-        и вежливо закрываем звонок. В будущей итерации с Asterisk первым шагом
-        будет реальная попытка SIP-transfer."""
-        logger.error("FATAL_FALLBACK triggered: %s", reason)
+    async def _fatal_fallback(
+        self,
+        reason: str,
+        trigger_exc: BaseException | None = None,
+    ) -> None:
+        """Последний резерв: при реальной неисправности бота создаём срочный
+        лид и вежливо закрываем звонок.
+
+        trigger_exc: исключение, вызвавшее fallback — нужно для телеметрии.
+        Нормальные disconnect'ы сюда попадать НЕ должны (отсекаются в run()).
+        """
+        # Телеметрия — один JSON-лог + одна строка в logs/fatal_fallback.jsonl.
+        # Это позволяет пост-mortem разобрать ЛЮБОЕ срабатывание: что именно
+        # упало, сколько прошло с начала звонка, сколько реплик было, и т.д.
+        self._log_fatal_telemetry(reason, trigger_exc)
 
         try:
             await self._speak_safe(self._FATAL_APOLOGY)
@@ -308,6 +327,62 @@ class DialogSession:
                 await self.websocket.close()
             except Exception:
                 pass
+
+    def _log_fatal_telemetry(
+        self,
+        reason: str,
+        trigger_exc: BaseException | None,
+    ) -> None:
+        """Пишет JSON-запись о срабатывании fatal_fallback в logs/fatal_fallback.jsonl.
+
+        Одна строка = одно срабатывание. Формат JSONL для лёгкого grep/jq.
+        Дополнительно пишет в основной logger (ERROR уровень) для SSE-стрима.
+        """
+        tb_text: str | None = None
+        if trigger_exc is not None and trigger_exc.__traceback__ is not None:
+            tb_text = "".join(
+                traceback.format_exception(
+                    type(trigger_exc), trigger_exc, trigger_exc.__traceback__,
+                )
+            )
+
+        user_turns = sum(1 for m in self.chat_history if m["role"] == "user")
+        telemetry = {
+            "session_id": self.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "uptime_sec": round(time.time() - self._start_time, 2),
+            "reason": reason,
+            "trigger_exc_type": type(trigger_exc).__name__ if trigger_exc else None,
+            "trigger_exc_msg": str(trigger_exc) if trigger_exc else None,
+            "consecutive_errors": self._consecutive_errors,
+            "user_turns": user_turns,
+            "chat_history_len": len(self.chat_history),
+            "caller_phone_known": self.caller_phone is not None,
+            "is_processing": self.is_processing,
+        }
+
+        # Короткая строка в основной logger — видна в SSE-стриме операторам
+        logger.error(
+            "FATAL_FALLBACK reason=%r exc=%s uptime=%ss turns=%d",
+            reason,
+            telemetry["trigger_exc_type"] or "none",
+            telemetry["uptime_sec"],
+            user_turns,
+        )
+
+        # Полная запись с traceback — в отдельный JSONL файл
+        log_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            jsonl_path = os.path.join(log_dir, "fatal_fallback.jsonl")
+            with open(jsonl_path, "a", encoding="utf-8") as f:
+                record = dict(telemetry)
+                if tb_text:
+                    record["traceback"] = tb_text
+                json.dump(record, f, ensure_ascii=False)
+                f.write("\n")
+        except Exception as exc:
+            logger.warning("Не удалось записать fatal_fallback telemetry: %s", exc)
 
     async def _speak_safe(self, text: str) -> None:
         """TTS + WebSocket send с подавлением ошибок (мы уже в fatal-режиме)."""
